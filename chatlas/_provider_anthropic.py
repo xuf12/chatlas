@@ -74,6 +74,8 @@ def ChatAnthropic(
     api_key: Optional[str] = None,
     max_tokens: int = 4096,
     kwargs: Optional["ChatClientArgs"] = None,
+    cache_system_prompt: bool = False,
+    cache_ttl: Optional[Literal["5m", "1h"]] = None,
 ) -> Chat["SubmitInputArgs", Message]:
     """
     Chat with an Anthropic Claude model.
@@ -128,6 +130,15 @@ def ChatAnthropic(
     kwargs
         Additional arguments to pass to the `anthropic.Anthropic()` client
         constructor.
+    cache_system_prompt
+        Whether to enable caching for the system prompt. When True, the system
+        prompt will be marked for caching with `{"type": "ephemeral"}` to
+        reduce latency and costs for repeated API calls with the same system
+        prompt.
+    cache_ttl
+        Time-to-live for cached content. Options are "5m" (5 minutes, default)
+        or "1h" (1 hour). Only used when cache_system_prompt=True. Use "1h" for
+        longer sessions or infrequent API calls to optimize costs and rate limits.
 
     Returns
     -------
@@ -180,6 +191,8 @@ def ChatAnthropic(
             model=model,
             max_tokens=max_tokens,
             kwargs=kwargs,
+            cache_system_prompt=cache_system_prompt,
+            cache_ttl=cache_ttl,
         ),
         system_prompt=system_prompt,
     )
@@ -196,6 +209,8 @@ class AnthropicProvider(
         api_key: Optional[str] = None,
         name: str = "Anthropic",
         kwargs: Optional["ChatClientArgs"] = None,
+        cache_system_prompt: bool = False,
+        cache_ttl: Optional[Literal["5m", "1h"]] = None,
     ):
         super().__init__(name=name, model=model)
         try:
@@ -206,6 +221,8 @@ class AnthropicProvider(
                 "You can install it with 'pip install anthropic'."
             )
         self._max_tokens = max_tokens
+        self._cache_system_prompt = cache_system_prompt
+        self._cache_ttl = cache_ttl
 
         kwargs_full: "ChatClientArgs" = {
             "api_key": api_key,
@@ -365,9 +382,54 @@ class AnthropicProvider(
 
         if "system" not in kwargs_full:
             if len(turns) > 0 and turns[0].role == "system":
-                kwargs_full["system"] = turns[0].text
+                # Handle system prompt caching
+                system_content = self._get_system_content(turns[0].text)
+                kwargs_full["system"] = system_content  # type: ignore
+
+        # Add beta header if any content uses cache_control or system prompt caching is enabled
+        if self._has_cache_control(turns) or self._cache_system_prompt:
+            extra_headers = kwargs_full.get("extra_headers", {}) or {}
+            if isinstance(extra_headers, dict):
+                extra_headers["anthropic-beta"] = "prompt-caching-2024-07-31"
+                kwargs_full["extra_headers"] = extra_headers
 
         return kwargs_full
+
+    def _get_system_content(self, system_text: str):
+        """Get system content with optional caching."""
+        if self._cache_system_prompt:
+            # Build cache control with optional TTL
+            cache_control = {"type": "ephemeral"}
+            if self._cache_ttl:
+                cache_control["ttl"] = self._cache_ttl
+
+            # Return system content as a list with cache_control
+            return [
+                {
+                    "type": "text",
+                    "text": system_text,
+                    "cache_control": cache_control
+                }
+            ]
+        else:
+            # Return as simple string
+            return system_text
+
+    def _has_cache_control(self, turns: list[Turn]) -> bool:
+        """Check if any content in turns has cache_control set."""
+        from ._content import (
+            ContentImageInline,
+            ContentImageRemote,
+            ContentPDF,
+            ContentText,
+        )
+
+        for turn in turns:
+            for content in turn.contents:
+                if isinstance(content, (ContentText, ContentImageInline, ContentImageRemote, ContentPDF)):
+                    if content.cache_control:
+                        return True
+        return False
 
     def stream_text(self, chunk) -> Optional[str]:
         if chunk.type == "content_block_delta" and chunk.delta.type == "text_delta":
@@ -508,11 +570,14 @@ class AnthropicProvider(
     @staticmethod
     def _as_content_block(content: Content) -> "ContentBlockParam":
         if isinstance(content, ContentText):
-            return {"text": content.text, "type": "text"}
+            block: dict[str, Any] = {"text": content.text, "type": "text"}
+            if content.cache_control:
+                block["cache_control"] = content.cache_control
+            return block  # type: ignore
         elif isinstance(content, ContentJson):
             return {"text": "<structured data/>", "type": "text"}
         elif isinstance(content, ContentPDF):
-            return {
+            block: dict[str, Any] = {
                 "type": "document",
                 "source": {
                     "type": "base64",
@@ -520,8 +585,11 @@ class AnthropicProvider(
                     "data": base64.b64encode(content.data).decode("utf-8"),
                 },
             }
+            if content.cache_control:
+                block["cache_control"] = content.cache_control
+            return block  # type: ignore
         elif isinstance(content, ContentImageInline):
-            return {
+            block: dict[str, Any] = {
                 "type": "image",
                 "source": {
                     "type": "base64",
@@ -529,14 +597,20 @@ class AnthropicProvider(
                     "data": content.data or "",
                 },
             }
+            if content.cache_control:
+                block["cache_control"] = content.cache_control
+            return block  # type: ignore
         elif isinstance(content, ContentImageRemote):
-            return {
+            block: dict[str, Any] = {
                 "type": "image",
                 "source": {
                     "type": "url",
                     "url": content.url,
                 },
             }
+            if content.cache_control:
+                block["cache_control"] = content.cache_control
+            return block  # type: ignore
         elif isinstance(content, ContentToolRequest):
             return {
                 "type": "tool_use",
@@ -748,6 +822,8 @@ def ChatBedrockAnthropic(
     base_url: Optional[str] = None,
     system_prompt: Optional[str] = None,
     kwargs: Optional["ChatBedrockClientArgs"] = None,
+    cache_system_prompt: bool = False,
+    cache_ttl: Optional[Literal["5m", "1h"]] = None,
 ) -> Chat["SubmitInputArgs", Message]:
     """
     Chat with an AWS bedrock model.
@@ -815,6 +891,17 @@ def ChatBedrockAnthropic(
     kwargs
         Additional arguments to pass to the `anthropic.AnthropicBedrock()`
         client constructor.
+    cache_system_prompt
+        Whether to enable caching for the system prompt. When True, the system
+        prompt will be marked for caching with `{"type": "ephemeral"}` to
+        reduce latency and costs for repeated API calls with the same system
+        prompt.
+    cache_ttl
+        Time-to-live for cached content. Options are "5m" (5 minutes, default)
+        or "1h" (1 hour). Only used when cache_system_prompt=True. Use "1h" for
+        longer sessions or infrequent API calls to optimize costs and rate limits.
+        Note: AWS Bedrock currently only supports basic ephemeral caching and
+        ignores the TTL parameter.
 
     Troubleshooting
     ---------------
@@ -883,12 +970,32 @@ def ChatBedrockAnthropic(
             aws_session_token=aws_session_token,
             base_url=base_url,
             kwargs=kwargs,
+            cache_system_prompt=cache_system_prompt,
+            cache_ttl=cache_ttl,
         ),
         system_prompt=system_prompt,
     )
 
 
 class AnthropicBedrockProvider(AnthropicProvider):
+    def _get_system_content(self, system_text: str):
+        """Get system content with optional caching. Bedrock doesn't support TTL."""
+        if self._cache_system_prompt:
+            # Bedrock only supports basic ephemeral caching (no TTL)
+            cache_control = {"type": "ephemeral"}
+
+            # Return system content as a list with cache_control
+            return [
+                {
+                    "type": "text",
+                    "text": system_text,
+                    "cache_control": cache_control
+                }
+            ]
+        else:
+            # Return as simple string
+            return system_text
+
     def __init__(
         self,
         *,
@@ -902,8 +1009,10 @@ class AnthropicBedrockProvider(AnthropicProvider):
         base_url: str | None,
         name: str = "AWS/Bedrock",
         kwargs: Optional["ChatBedrockClientArgs"] = None,
+        cache_system_prompt: bool = False,
+        cache_ttl: Optional[Literal["5m", "1h"]] = None,
     ):
-        super().__init__(name=name, model=model, max_tokens=max_tokens)
+        super().__init__(name=name, model=model, max_tokens=max_tokens, cache_system_prompt=cache_system_prompt, cache_ttl=cache_ttl)
 
         try:
             from anthropic import AnthropicBedrock, AsyncAnthropicBedrock
@@ -948,3 +1057,35 @@ class AnthropicBedrockProvider(AnthropicProvider):
             res.append(info)
 
         return res
+
+    def _chat_perform_args(
+        self,
+        stream: bool,
+        turns: list[Turn],
+        tools: dict[str, Tool],
+        data_model: Optional[type[BaseModel]] = None,
+        kwargs: Optional["SubmitInputArgs"] = None,
+    ) -> "SubmitInputArgs":
+        """
+        Override parent method to remove anthropic-beta header for Bedrock.
+
+        AWS Bedrock doesn't accept the anthropic-beta header that's required
+        for the direct Anthropic API, but it supports the same cache_control
+        parameters in the request body.
+        """
+        # Get the standard arguments from parent class
+        kwargs_full = super()._chat_perform_args(stream, turns, tools, data_model, kwargs)
+
+        # Remove the anthropic-beta header if it exists
+        # Bedrock doesn't support this header but does support cache_control in request body
+        if "extra_headers" in kwargs_full and kwargs_full["extra_headers"]:
+            extra_headers = dict(kwargs_full["extra_headers"])
+            if "anthropic-beta" in extra_headers:
+                del extra_headers["anthropic-beta"]
+                # If no other headers remain, remove the key entirely
+                if extra_headers:
+                    kwargs_full["extra_headers"] = extra_headers
+                else:
+                    del kwargs_full["extra_headers"]
+
+        return kwargs_full

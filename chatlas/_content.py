@@ -150,9 +150,18 @@ class Content(BaseModel):
 class ContentText(Content):
     """
     Text content for a [](`~chatlas.Turn`)
+
+    Parameters
+    ----------
+    text
+        The text content.
+    cache_control
+        Optional cache control for prompt caching. Use `{"type": "ephemeral"}`
+        to mark this content for caching with Anthropic models.
     """
 
     text: str
+    cache_control: Optional[dict[str, Any]] = None
     content_type: ContentTypeEnum = "text"
 
     def __init__(self, **data: Any):
@@ -197,10 +206,14 @@ class ContentImageRemote(ContentImage):
         The URL of the image.
     detail
         A detail setting for the image. Can be `"auto"`, `"low"`, or `"high"`.
+    cache_control
+        Optional cache control for prompt caching. Use `{"type": "ephemeral"}`
+        to mark this content for caching with Anthropic models.
     """
 
     url: str
     detail: Literal["auto", "low", "high"] = "auto"
+    cache_control: Optional[dict[str, Any]] = None
 
     content_type: ContentTypeEnum = "image_remote"
 
@@ -231,10 +244,14 @@ class ContentImageInline(ContentImage):
         The content type of the image.
     data
         The base64-encoded image data.
+    cache_control
+        Optional cache control for prompt caching. Use `{"type": "ephemeral"}`
+        to mark this content for caching with Anthropic models.
     """
 
     image_content_type: ImageContentTypes
     data: Optional[str] = None
+    cache_control: Optional[dict[str, Any]] = None
 
     content_type: ContentTypeEnum = "image_inline"
 
@@ -634,11 +651,15 @@ class ContentPDF(Content):
 
     Parameters
     ----------
-    value
+    data
         The PDF data extracted
+    cache_control
+        Optional cache control for prompt caching. Use `{"type": "ephemeral"}`
+        to mark this content for caching with Anthropic models.
     """
 
     data: bytes
+    cache_control: Optional[dict[str, Any]] = None
 
     content_type: ContentTypeEnum = "pdf"
 

@@ -112,13 +112,56 @@ class Turn(BaseModel, Generic[CompletionT]):
     def text(self) -> str:
         return "".join(x.text for x in self.contents if isinstance(x, ContentText))
 
+    def get_cache_info(self) -> dict[str, int | float | None]:
+        """
+        Get cache performance information for this turn.
+
+        Returns
+        -------
+        dict
+            A dictionary with cache performance metrics including:
+            - input_tokens: Number of input tokens
+            - output_tokens: Number of output tokens
+            - cached_tokens: Number of tokens read from cache
+            - cache_hit_rate: Percentage of input tokens that came from cache (0-100)
+            - tokens_saved: Number of tokens saved due to caching
+        """
+        if not self.tokens:
+            return {
+                "input_tokens": None,
+                "output_tokens": None,
+                "cached_tokens": None,
+                "cache_hit_rate": None,
+                "tokens_saved": None,
+            }
+
+        input_tokens, output_tokens, cached_tokens = self.tokens
+
+        # Cache hit rate as percentage
+        cache_hit_rate = (
+            (cached_tokens / input_tokens * 100) if input_tokens > 0 else 0
+        )
+
+        return {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cached_tokens": cached_tokens,
+            "cache_hit_rate": round(cache_hit_rate, 1),
+            "tokens_saved": cached_tokens,
+        }
+
     def __str__(self) -> str:
         return self.text
 
     def __repr__(self, indent: int = 0) -> str:
         res = " " * indent + f"<Turn role='{self.role}'"
         if self.tokens:
+            input_tokens, output_tokens, cached_tokens = self.tokens
             res += f" tokens={self.tokens}"
+            # Add cache performance info if there are cached tokens
+            if cached_tokens > 0:
+                cache_info = self.get_cache_info()
+                res += f" cache_hit_rate={cache_info['cache_hit_rate']}%"
         if self.finish_reason:
             res += f" finish_reason='{self.finish_reason}'"
         if self.completion:

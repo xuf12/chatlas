@@ -552,6 +552,46 @@ class Chat(Generic[SubmitInputArgsT, CompletionT]):
             f"Expected last turn to have a role of 'user' or `'assistant'`, not '{last_turn['role']}'"
         )
 
+    def get_cache_performance(self) -> dict[str, int | float]:
+        """
+        Get cache performance metrics for the entire chat session.
+
+        Returns
+        -------
+        dict
+            A dictionary with cache performance metrics including:
+            - total_input_tokens: Total input tokens across all turns
+            - total_cached_tokens: Total tokens read from cache
+            - cache_hit_rate: Overall cache hit rate as percentage (0-100)
+            - tokens_saved: Total tokens saved due to caching
+            - turns_with_cache: Number of turns that used cached tokens
+        """
+        total_input_tokens = 0
+        total_cached_tokens = 0
+        turns_with_cache = 0
+
+        for turn in self._turns:
+            if turn.tokens and turn.role in ["user", "assistant"]:
+                input_tokens, _, cached_tokens = turn.tokens
+                total_input_tokens += input_tokens
+                total_cached_tokens += cached_tokens
+                if cached_tokens > 0:
+                    turns_with_cache += 1
+
+        cache_hit_rate = (
+            (total_cached_tokens / total_input_tokens * 100)
+            if total_input_tokens > 0
+            else 0
+        )
+
+        return {
+            "total_input_tokens": total_input_tokens,
+            "total_cached_tokens": total_cached_tokens,
+            "cache_hit_rate": round(cache_hit_rate, 1),
+            "tokens_saved": total_cached_tokens,
+            "turns_with_cache": turns_with_cache,
+        }
+
     def token_count(
         self,
         *args: Content | str,
